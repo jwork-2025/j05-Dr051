@@ -4,29 +4,42 @@ import com.gameengine.components.PhysicsComponent;
 import com.gameengine.components.RenderComponent;
 import com.gameengine.components.TransformComponent;
 import com.gameengine.core.GameEngine;
-import com.gameengine.core.GameLogic;
 import com.gameengine.core.GameObject;
-import com.gameengine.core.ParticleSystem;
 import com.gameengine.graphics.IRenderer;
+import com.gameengine.input.InputManager;
+import com.gameengine.math.CollisionUtils;
 import com.gameengine.math.Vector2;
 import com.gameengine.scene.Scene;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 
 public class GameScene extends Scene {
-    private final GameEngine engine;
+
+    private GameEngine engine;
     private IRenderer renderer;
+    private InputManager inputManager;
     private Random random;
-    private float time;
-    private GameLogic gameLogic;
-    private ParticleSystem playerParticles;
-    private List<ParticleSystem> collisionParticles;
-    private Map<GameObject, ParticleSystem> aiPlayerParticles;
-    private boolean waitingReturn;
-    private float waitInputTimer;
-    private float freezeTimer;
-    private final float inputCooldown = 0.25f;
-    private final float freezeDelay = 0.20f;
+
+    private float elapsedTime;
+    private float spawnTimer;
+
+    private GameObject player;
+    private final List<GameObject> fireballs = new ArrayList<>();
+    private boolean wasLeftMousePressed;
+    private int score;
+    private int maxHealth;
+    private int playerHealth;
+    private boolean playerDead;
+
+    private final float FIREBALL_SPEED = 350f;
+    private final float FIREBALL_RADIUS = 6f;
+    private final int LEFT_MOUSE_BUTTON = 0; // GLFW mouse button 0 is left
+    private final float MIN_SPAWN_INTERVAL = 0.1f;
+    private final float BASE_SPAWN_INTERVAL = 0.8f;
+
+    private boolean awaitingRestartConfirmation = false;
 
     public GameScene(GameEngine engine) {
         super("GameScene");
@@ -37,341 +50,327 @@ public class GameScene extends Scene {
     public void initialize() {
         super.initialize();
         this.renderer = engine.getRenderer();
+        this.renderer = engine.getRenderer();
+        this.inputManager = engine.getInputManager();
         this.random = new Random();
-        this.time = 0;
-        this.gameLogic = new GameLogic(this);
-        this.gameLogic.setGameEngine(engine);
-        this.waitingReturn = false;
-        this.waitInputTimer = 0f;
-        this.freezeTimer = 0f;
-
-        createPlayer();
-        createAIPlayers();
-        createDecorations();
-
-        collisionParticles = new ArrayList<>();
-        aiPlayerParticles = new HashMap<>();
-
-        playerParticles = new ParticleSystem(renderer, new Vector2(renderer.getWidth() / 2.0f, renderer.getHeight() / 2.0f));
-        playerParticles.setActive(true);
         
+        resetGame();
     }
 
     @Override
     public void update(float deltaTime) {
-        super.update(deltaTime);
-        time += deltaTime;
-
-        gameLogic.handlePlayerInput(deltaTime);
-        gameLogic.handleAIPlayerMovement(deltaTime);
-        gameLogic.handleAIPlayerAvoidance(deltaTime);
-
-        boolean wasGameOver = gameLogic.isGameOver();
-        gameLogic.checkCollisions();
-
-        if (gameLogic.isGameOver() && !wasGameOver) {
-            GameObject player = gameLogic.getUserPlayer();
-            if (player != null) {
-                TransformComponent transform = player.getComponent(TransformComponent.class);
-                if (transform != null) {
-                    ParticleSystem.Config cfg = new ParticleSystem.Config();
-                    cfg.initialCount = 0;
-                    cfg.spawnRate = 9999f;
-                    cfg.opacityMultiplier = 1.0f;
-                    cfg.minRenderSize = 3.0f;
-                    cfg.burstSpeedMin = 250f;
-                    cfg.burstSpeedMax = 520f;
-                    cfg.burstLifeMin = 0.5f;
-                    cfg.burstLifeMax = 1.2f;
-                    cfg.burstSizeMin = 18f;
-                    cfg.burstSizeMax = 42f;
-                    cfg.burstR = 1.0f;
-                    cfg.burstGMin = 0.0f;
-                    cfg.burstGMax = 0.05f;
-                    cfg.burstB = 0.0f;
-                    ParticleSystem explosion = new ParticleSystem(renderer, transform.getPosition(), cfg);
-                    explosion.burst(180);
-                    collisionParticles.add(explosion);
-                    waitingReturn = true;
-                    waitInputTimer = 0f;
-                    freezeTimer = 0f;
-                }
+        if (awaitingRestartConfirmation) {
+            // Check for restart confirmation (SPACE or ENTER) or return to menu (ESC)
+            if (inputManager.isKeyJustPressed(32) || inputManager.isKeyJustPressed(257)) { // Space or Enter
+                awaitingRestartConfirmation = false;
+                resetGame();
+            } else if (inputManager.isKeyJustPressed(256)) { // ESC
+                engine.setScene(new MenuScene(engine, "MainMenu"));
+                return;
             }
-        }
-
-        updateParticles(deltaTime);
-
-        if (waitingReturn) {
-            waitInputTimer += deltaTime;
-            freezeTimer += deltaTime;
-        }
-
-        if (waitingReturn && waitInputTimer >= inputCooldown && (engine.getInputManager().isAnyKeyJustPressed() || engine.getInputManager().isMouseButtonJustPressed(0))) {
-            MenuScene menu = new MenuScene(engine, "MainMenu");
-            engine.setScene(menu);
             return;
         }
 
-        if (time >= 1.0f) {
-            createAIPlayer();
-            time = 0;
-        }
-    }
+        super.update(deltaTime);
+        handlePlayerInput(deltaTime);
+        handleShooting();
+        handleFireballEnemyCollisions();
+        checkPlayerEnemyCollisions();
+        cleanupInactiveFireballs();
 
-    private void updateParticles(float deltaTime) {
-        boolean freeze = waitingReturn && freezeTimer >= freezeDelay;
+        elapsedTime += deltaTime;
+        spawnTimer += deltaTime;
 
-        if (playerParticles != null && !freeze) {
-            GameObject player = gameLogic.getUserPlayer();
-            if (player != null) {
-                TransformComponent transform = player.getComponent(TransformComponent.class);
-                if (transform != null) {
-                    Vector2 playerPos = transform.getPosition();
-                    playerParticles.setPosition(playerPos);
-                }
-            }
-            playerParticles.update(deltaTime);
-        }
-
-        List<GameObject> aiPlayers = gameLogic.getAIPlayers();
-        if (!freeze) {
-            for (GameObject aiPlayer : aiPlayers) {
-                if (aiPlayer != null && aiPlayer.isActive()) {
-                    ParticleSystem particles = aiPlayerParticles.get(aiPlayer);
-                    if (particles == null) {
-                        TransformComponent transform = aiPlayer.getComponent(TransformComponent.class);
-                        if (transform != null) {
-                            particles = new ParticleSystem(renderer, transform.getPosition(), ParticleSystem.Config.light());
-                            particles.setActive(true);
-                            aiPlayerParticles.put(aiPlayer, particles);
-                        }
-                    }
-                    if (particles != null) {
-                        TransformComponent transform = aiPlayer.getComponent(TransformComponent.class);
-                        if (transform != null) {
-                            particles.setPosition(transform.getPosition());
-                        }
-                        particles.update(deltaTime);
-                    }
-                }
-            }
-        }
-
-        List<GameObject> toRemove = new ArrayList<>();
-        for (Map.Entry<GameObject, ParticleSystem> entry : aiPlayerParticles.entrySet()) {
-            if (!entry.getKey().isActive() || !aiPlayers.contains(entry.getKey())) {
-                toRemove.add(entry.getKey());
-            }
-        }
-        for (GameObject removed : toRemove) {
-            aiPlayerParticles.remove(removed);
-        }
-
-        for (int i = collisionParticles.size() - 1; i >= 0; i--) {
-            ParticleSystem ps = collisionParticles.get(i);
-            if (ps != null) {
-                if (!freeze) {
-                    ps.update(deltaTime);
-                }
-            }
+        // Increase difficulty over time by spawning enemies faster
+        float spawnInterval = Math.max(MIN_SPAWN_INTERVAL, BASE_SPAWN_INTERVAL - elapsedTime * 0.05f);
+        if (spawnTimer > spawnInterval) {
+            createEnemy();
+            spawnTimer = 0f;
         }
     }
 
     @Override
     public void render() {
+        // Draw background
         renderer.drawRect(0, 0, renderer.getWidth(), renderer.getHeight(), 0.1f, 0.1f, 0.2f, 1.0f);
 
+        // Render all game objects (player, enemies, fireballs, etc.)
         super.render();
 
-        renderParticles();
-
-        if (gameLogic.isGameOver()) {
+        // Draw UI
+        renderer.drawText(20, 30, "Score: " + score, 1.0f, 1.0f, 1.0f, 1.0f);
+        renderer.drawText(renderer.getWidth() - 200, 30, String.format("Time: %.1f s", elapsedTime), 1.0f, 1.0f, 1.0f, 1.0f);
+    
+        if (awaitingRestartConfirmation) {
             float cx = renderer.getWidth() / 2.0f;
             float cy = renderer.getHeight() / 2.0f;
             renderer.drawRect(0, 0, renderer.getWidth(), renderer.getHeight(), 0.0f, 0.0f, 0.0f, 0.35f);
-            renderer.drawRect(cx - 200, cy - 60, 400, 120, 0.0f, 0.0f, 0.0f, 0.7f);
-            renderer.drawText(cx - 100, cy - 10, "GAME OVER", 1.0f, 1.0f, 1.0f, 1.0f);
-            renderer.drawText(cx - 180, cy + 30, "PRESS ANY KEY TO RETURN", 0.8f, 0.8f, 0.8f, 1.0f);
+            renderer.drawRect(cx - 250, cy - 60, 500, 120, 0.1f, 0.1f, 0.1f, 0.8f);
+            renderer.drawText(cx - 100, cy - 20, "GAME OVER", 1.0f, 0.2f, 0.2f, 1.0f);
+            renderer.drawText(cx - 220, cy + 30, "Press SPACE or ENTER to restart", 0.9f, 0.9f, 0.9f, 1.0f);
         }
     }
 
-    private void renderParticles() {
-        if (playerParticles != null) {
-            int count = playerParticles.getParticleCount();
-            if (count > 0) {
-                playerParticles.render();
-            }
+    private void handlePlayerInput(float deltaTime) {
+        if (player == null || playerDead) return;
+
+        PhysicsComponent physics = player.getComponent(PhysicsComponent.class);
+        if (physics == null) return;
+
+        Vector2 movement = new Vector2();
+        // Use GLFW key codes
+        if (inputManager.isKeyPressed(87) || inputManager.isKeyPressed(265)) { // W or Up
+            movement.y -= 1;
+        }
+        if (inputManager.isKeyPressed(83) || inputManager.isKeyPressed(264)) { // S or Down
+            movement.y += 1;
+        }
+        if (inputManager.isKeyPressed(65) || inputManager.isKeyPressed(263)) { // A or Left
+            movement.x -= 1;
+        }
+        if (inputManager.isKeyPressed(68) || inputManager.isKeyPressed(262)) { // D or Right
+            movement.x += 1;
         }
 
-        for (ParticleSystem ps : aiPlayerParticles.values()) {
-            if (ps != null && ps.getParticleCount() > 0) {
-                ps.render();
-            }
-        }
-
-        for (ParticleSystem ps : collisionParticles) {
-            if (ps != null && ps.getParticleCount() > 0) {
-                ps.render();
-            }
+        if (movement.magnitude() > 0) {
+            // Apply force instead of setting velocity directly for better physics interaction
+            physics.applyForce(movement.normalize().multiply(55000f * deltaTime));
         }
     }
 
     private void createPlayer() {
-        GameObject player = new GameObject("Player") {
+        player = new GameObject("Player") {
             private Vector2 basePosition;
 
             @Override
-            public void update(float deltaTime) {
-                super.update(deltaTime);
-                updateComponents(deltaTime);
-                updateBodyParts();
-            }
-
-            @Override
             public void render() {
-                renderBodyParts();
-            }
-
-            private void updateBodyParts() {
                 TransformComponent transform = getComponent(TransformComponent.class);
-                if (transform != null) {
-                    basePosition = transform.getPosition();
-                }
-            }
+                if (transform == null) return;
+                basePosition = transform.getPosition();
 
-            private void renderBodyParts() {
-                if (basePosition == null) return;
+                // Body
+                renderer.drawRect(basePosition.x - 8, basePosition.y - 10, 16, 20, 1.0f, 0.0f, 0.0f, 1.0f);
+                // Head
+                renderer.drawRect(basePosition.x - 6, basePosition.y - 22, 12, 12, 1.0f, 0.5f, 0.0f, 1.0f);
+                // Left arm
+                renderer.drawRect(basePosition.x - 13, basePosition.y - 5, 6, 12, 1.0f, 0.8f, 0.0f, 1.0f);
+                // Right arm
+                renderer.drawRect(basePosition.x + 7, basePosition.y - 5, 6, 12, 0.0f, 1.0f, 0.0f, 1.0f);
 
-                renderer.drawRect(
-                    basePosition.x - 8, basePosition.y - 10, 16, 20,
-                    1.0f, 0.0f, 0.0f, 1.0f
-                );
-
-                renderer.drawRect(
-                    basePosition.x - 6, basePosition.y - 22, 12, 12,
-                    1.0f, 0.5f, 0.0f, 1.0f
-                );
-
-                renderer.drawRect(
-                    basePosition.x - 13, basePosition.y - 5, 6, 12,
-                    1.0f, 0.8f, 0.0f, 1.0f
-                );
-
-                renderer.drawRect(
-                    basePosition.x + 7, basePosition.y - 5, 6, 12,
-                    0.0f, 1.0f, 0.0f, 1.0f
-                );
+                drawPlayerHealthBar(basePosition);
             }
         };
 
         player.addComponent(new TransformComponent(new Vector2(renderer.getWidth() / 2.0f, renderer.getHeight() / 2.0f)));
-
         PhysicsComponent physics = player.addComponent(new PhysicsComponent(1.0f));
-        physics.setFriction(0.95f);
+        physics.setFriction(0.92f); // Slightly lower friction for more slide
 
         addGameObject(player);
     }
 
-    private void createAIPlayers() {
-        for (int i = 0; i < 30; i++) {
-            createAIPlayer();
+    private void createEnemies(int count) {
+        for (int i = 0; i < count; i++) {
+            createEnemy();
         }
     }
 
-    private void createAIPlayer() {
-        GameObject aiPlayer = new GameObject("AIPlayer") {
+    private void createEnemy() {
+        final float chaseSpeed = 30f + random.nextFloat() * 15f;
+
+        GameObject enemy = new GameObject("Enemy") {
             @Override
             public void update(float deltaTime) {
-                super.update(deltaTime);
-                updateComponents(deltaTime);
-            }
+                if (player == null || !player.isActive()) {
+                    return;
+                }
+                TransformComponent enemyTransform = getComponent(TransformComponent.class);
+                TransformComponent playerTransform = player.getComponent(TransformComponent.class);
+                PhysicsComponent physics = getComponent(PhysicsComponent.class);
 
-            @Override
-            public void render() {
-                renderComponents();
+                if (enemyTransform != null && playerTransform != null && physics != null) {
+                    Vector2 direction = playerTransform.getPosition().subtract(enemyTransform.getPosition());
+                    if (direction.magnitude() > 1f) {
+                        Vector2 desiredVelocity = direction.normalize().multiply(chaseSpeed);
+                        // Apply force for acceleration
+                        physics.applyForce(desiredVelocity.subtract(physics.getVelocity()).multiply(5f));
+                    }
+                }
             }
         };
 
-        Vector2 position;
-        do {
-            position = new Vector2(
-                random.nextFloat() * renderer.getWidth(),
-                random.nextFloat() * renderer.getHeight()
-            );
-        } while (position.distance(new Vector2(renderer.getWidth() / 2.0f, renderer.getHeight() / 2.0f)) < 100);
-
-        aiPlayer.addComponent(new TransformComponent(position));
-        // 使用工厂统一外观
-        RenderComponent rc = aiPlayer.addComponent(new RenderComponent(
-            RenderComponent.RenderType.RECTANGLE,
-            new Vector2(20, 20),
-            new RenderComponent.Color(0.0f, 0.8f, 1.0f, 1.0f)
-        ));
-        rc.setRenderer(renderer);
-
-        PhysicsComponent physics = aiPlayer.addComponent(new PhysicsComponent(0.5f));
-        physics.setVelocity(new Vector2(
-            (random.nextFloat() - 0.5f) * 150,
-            (random.nextFloat() - 0.5f) * 150
-        ));
-        physics.setFriction(0.98f);
-
-        addGameObject(aiPlayer);
-    }
-
-    private void createDecorations() {
-        for (int i = 0; i < 5; i++) {
-            createDecoration();
-        }
-    }
-
-    private void createDecoration() {
-        GameObject decoration = new GameObject("Decoration") {
-            @Override
-            public void update(float deltaTime) {
-                super.update(deltaTime);
-                updateComponents(deltaTime);
-            }
-
-            @Override
-            public void render() {
-                renderComponents();
-            }
-        };
-
-        Vector2 position = new Vector2(
-            random.nextFloat() * renderer.getWidth(),
-            random.nextFloat() * renderer.getHeight()
-        );
-
-        decoration.addComponent(new TransformComponent(position));
-
-        RenderComponent render = decoration.addComponent(new RenderComponent(
-            RenderComponent.RenderType.CIRCLE,
-            new Vector2(5, 5),
-            new RenderComponent.Color(0.5f, 0.5f, 1.0f, 0.8f)
-        ));
+        Vector2 position = new Vector2(random.nextFloat() * renderer.getWidth(), random.nextFloat() * renderer.getHeight());
+        enemy.addComponent(new TransformComponent(position));
+        RenderComponent render = enemy.addComponent(new RenderComponent(RenderComponent.RenderType.RECTANGLE,
+            new Vector2(20, 20), new RenderComponent.Color(1.0f, 0.5f, 0.0f, 1.0f)));
         render.setRenderer(renderer);
+        PhysicsComponent physics = enemy.addComponent(new PhysicsComponent(0.5f));
+        physics.setFriction(0.95f);
 
-        addGameObject(decoration);
+        addGameObject(enemy);
     }
 
-    @Override
-    public void clear() {
-        if (gameLogic != null) {
-            gameLogic.cleanup();
+    private void createDecorations(int count) {
+        for (int i = 0; i < count; i++) {
+            GameObject decoration = new GameObject("Decoration");
+            Vector2 position = new Vector2(random.nextFloat() * renderer.getWidth(), random.nextFloat() * renderer.getHeight());
+            decoration.addComponent(new TransformComponent(position));
+            RenderComponent render = decoration.addComponent(new RenderComponent(RenderComponent.RenderType.CIRCLE,
+                new Vector2(5, 5), new RenderComponent.Color(0.5f, 0.5f, 1.0f, 0.8f)));
+            render.setRenderer(renderer);
+            addGameObject(decoration);
         }
-        if (playerParticles != null) {
-            playerParticles.clear();
-        }
-        if (collisionParticles != null) {
-            for (ParticleSystem ps : collisionParticles) {
-                if (ps != null) ps.clear();
+    }
+
+    private void handleShooting() {
+        if (player == null || playerDead) return;
+
+        boolean isPressed = inputManager.isMouseButtonPressed(LEFT_MOUSE_BUTTON);
+        if (isPressed && !wasLeftMousePressed) {
+            TransformComponent transform = player.getComponent(TransformComponent.class);
+            if (transform != null) {
+                Vector2 startPosition = transform.getPosition();
+                Vector2 targetPosition = inputManager.getMousePosition();
+                Vector2 direction = targetPosition.subtract(startPosition);
+                if (direction.magnitude() > 0.01f) {
+                    spawnFireball(startPosition, direction);
+                }
             }
-            collisionParticles.clear();
         }
-        super.clear();
+        wasLeftMousePressed = isPressed;
+    }
+
+    private void spawnFireball(Vector2 startPosition, Vector2 direction) {
+        Vector2 normalizedDirection = direction.normalize();
+
+        GameObject fireball = new GameObject("Fireball") {
+            @Override
+            public void render() {
+                TransformComponent transform = getComponent(TransformComponent.class);
+                if (transform != null) {
+                    renderer.drawCircle(transform.getPosition().x, transform.getPosition().y, FIREBALL_RADIUS, 16, 1.0f, 0.4f, 0.0f, 1.0f);
+                }
+            }
+        };
+
+        fireball.addComponent(new TransformComponent(new Vector2(startPosition)));
+        PhysicsComponent physics = fireball.addComponent(new PhysicsComponent(0.1f));
+        physics.setFriction(1.0f); // No friction
+        physics.setVelocity(normalizedDirection.multiply(FIREBALL_SPEED));
+        
+        addGameObject(fireball);
+        fireballs.add(fireball);
+    }
+
+    private void handleFireballEnemyCollisions() {
+        List<GameObject> enemies = findGameObjectsByName("Enemy");
+        if (enemies.isEmpty() || fireballs.isEmpty()) return;
+
+        for (GameObject fireball : new ArrayList<>(fireballs)) {
+            if (!fireball.isActive()) continue;
+            
+            TransformComponent fireballTransform = fireball.getComponent(TransformComponent.class);
+            if (fireballTransform == null) continue;
+            CollisionUtils.Rect fireballRect = CollisionUtils.circleBounds(fireballTransform.getPosition(), FIREBALL_RADIUS);
+
+            for (GameObject enemy : enemies) {
+                if (!enemy.isActive()) continue;
+
+                TransformComponent enemyTransform = enemy.getComponent(TransformComponent.class);
+                CollisionUtils.Rect enemyRect = CollisionUtils.enemyBounds(enemy, enemyTransform);
+                if (enemyRect != null && fireballRect.intersects(enemyRect)) {
+                    enemy.setActive(false);
+                    fireball.setActive(false);
+                    score += 10;
+                    break; 
+                }
+            }
+        }
+    }
+    
+    private void checkPlayerEnemyCollisions() {
+        if (player == null || playerDead) return;
+
+        List<GameObject> enemies = findGameObjectsByName("Enemy");
+        if (enemies.isEmpty()) return;
+
+        TransformComponent playerTransform = player.getComponent(TransformComponent.class);
+        CollisionUtils.Rect playerRect = CollisionUtils.playerBounds(playerTransform.getPosition());
+
+        for (GameObject enemy : enemies) {
+            if (!enemy.isActive()) continue;
+
+            TransformComponent enemyTransform = enemy.getComponent(TransformComponent.class);
+            CollisionUtils.Rect enemyRect = CollisionUtils.enemyBounds(enemy, enemyTransform);
+            
+            if (enemyRect != null && playerRect.intersects(enemyRect)) {
+                handlePlayerEnemyCollision(enemy);
+                break; 
+            }
+        }
+    }
+
+    private void handlePlayerEnemyCollision(GameObject enemy) {
+        if (playerDead) return;
+
+        enemy.setActive(false);
+        playerHealth--;
+        score++;
+
+        if (playerHealth <= 0) {
+            handlePlayerDeath();
+        }
+    }
+
+    private void handlePlayerDeath() {
+        playerDead = true;
+        if (player != null) {
+            player.setActive(false);
+        }
+        awaitingRestartConfirmation = true;
+    }
+
+    private void cleanupInactiveFireballs() {
+        fireballs.removeIf(fb -> !fb.isActive() || isOutOfBounds(fb.getComponent(TransformComponent.class).getPosition()));
+    }
+
+    private boolean isOutOfBounds(Vector2 position) {
+        return position.x < 0 || position.x > renderer.getWidth() || position.y < 0 || position.y > renderer.getHeight();
+    }
+
+    private void resetGame() {
+        // Clear existing objects
+        for(GameObject obj : new ArrayList<>(getGameObjects())) {
+            removeGameObject(obj);
+        }
+        fireballs.clear();
+
+        // Reset state
+        this.score = 0;
+        this.elapsedTime = 0f;
+        this.spawnTimer = 0f;
+        this.wasLeftMousePressed = false;
+        this.maxHealth = 5;
+        this.playerHealth = maxHealth;
+        this.playerDead = false;
+        this.awaitingRestartConfirmation = false;
+        
+        // Create fresh game objects
+        createPlayer();
+        createEnemies(10);
+        createDecorations(5);
+    }
+    
+    private void drawPlayerHealthBar(Vector2 basePosition) {
+        if (maxHealth <= 0) return;
+        float barWidth = 50f;
+        float barHeight = 6f;
+        float x = basePosition.x - barWidth / 2f;
+        float y = basePosition.y - CollisionUtils.PLAYER_TOP_OFFSET - 8f;
+
+        renderer.drawRect(x, y, barWidth, barHeight, 0.2f, 0.0f, 0.0f, 0.7f);
+        if (playerHealth > 0) {
+            float ratio = (float) playerHealth / maxHealth;
+            renderer.drawRect(x, y, barWidth * ratio, barHeight, 0.0f, 0.9f, 0.1f, 0.9f);
+        }
     }
 }
-
-

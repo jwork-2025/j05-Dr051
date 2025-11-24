@@ -40,6 +40,42 @@ public final class EntityFactory {
         rc.setRenderer(renderer);
         return obj;
     }
+
+    public static GameObject createEnemyVisual(IRenderer renderer) {
+        GameObject obj = new GameObject("Enemy");
+        TransformComponent tc = obj.addComponent(new TransformComponent(new Vector2(0, 0)));
+        RenderComponent rc = obj.addComponent(new RenderComponent(
+            RenderComponent.RenderType.RECTANGLE,
+            new Vector2(20, 20),
+            new RenderComponent.Color(0.8f, 0.1f, 0.1f, 1.0f)
+        ));
+        rc.setRenderer(renderer);
+        return obj;
+    }
+
+    public static GameObject createFireballVisual(IRenderer renderer) {
+        GameObject obj = new GameObject("Fireball");
+        TransformComponent tc = obj.addComponent(new TransformComponent(new Vector2(0, 0)));
+        RenderComponent rc = obj.addComponent(new RenderComponent(
+            RenderComponent.RenderType.CIRCLE,
+            new Vector2(10, 10),
+            new RenderComponent.Color(1.0f, 0.5f, 0.0f, 1.0f)
+        ));
+        rc.setRenderer(renderer);
+        return obj;
+    }
+
+    public static GameObject createDecorationVisual(IRenderer renderer) {
+        GameObject obj = new GameObject("Decoration");
+        TransformComponent tc = obj.addComponent(new TransformComponent(new Vector2(0, 0)));
+        RenderComponent rc = obj.addComponent(new RenderComponent(
+            RenderComponent.RenderType.RECTANGLE,
+            new Vector2(30, 30),
+            new RenderComponent.Color(0.5f, 0.5f, 0.5f, 1.0f)
+        ));
+        rc.setRenderer(renderer);
+        return obj;
+    }
 }
 
 

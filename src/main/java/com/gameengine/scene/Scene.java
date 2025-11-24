@@ -41,13 +41,9 @@ public class Scene {
         }
         objectsToRemove.clear();
         
-        Iterator<GameObject> iterator = gameObjects.iterator();
-        while (iterator.hasNext()) {
-            GameObject obj = iterator.next();
+        for (GameObject obj : gameObjects) {
             if (obj.isActive()) {
                 obj.update(deltaTime);
-            } else {
-                iterator.remove();
             }
         }
     }
@@ -75,6 +71,16 @@ public class Scene {
             .map(obj -> obj.getComponent(componentType))
             .filter(Objects::nonNull)
             .collect(Collectors.toList());
+    }
+    
+    public List<GameObject> findGameObjectsByName(String name) {
+        return gameObjects.stream()
+            .filter(obj -> obj.getName() != null && obj.getName().equals(name))
+            .collect(Collectors.toList());
+    }
+
+    public void removeGameObject(GameObject gameObject) {
+        objectsToRemove.add(gameObject);
     }
     
     public void clear() {

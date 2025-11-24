@@ -529,6 +529,7 @@ public class GPURenderer implements IRenderer {
     
     @Override
     public void cleanup() {
+        initialized = false;
         for (Integer textureId : charTextures.values()) {
             if (textureId > 0) {
                 GL11.glDeleteTextures(textureId);

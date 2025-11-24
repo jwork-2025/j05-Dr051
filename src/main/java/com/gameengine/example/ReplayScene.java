@@ -66,7 +66,7 @@ public class ReplayScene extends Scene {
     @Override
     public void update(float deltaTime) {
         super.update(deltaTime);
-        if (input.isKeyJustPressed(27) || input.isKeyJustPressed(8)) { // ESC/BACK
+        if (input.isKeyJustPressed(27) || input.isKeyJustPressed(8) || input.isKeyJustPressed(256)) { // ESC (AWT 27, GLFW 256) / BACK (8)
             engine.setScene(new MenuScene(engine, "MainMenu"));
             return;
         }
@@ -206,7 +206,7 @@ public class ReplayScene extends Scene {
         }
     }
 
-    private GameObject buildObjectFromEntity(Keyframe.EntityInfo ei, int index) {
+    private GameObject buildObjectFromEntity(Keyframe.EntityInfo ei, int uid) {
         GameObject obj;
         if ("Player".equalsIgnoreCase(ei.id)) {
             obj = com.gameengine.example.EntityFactory.createPlayerVisual(renderer);
@@ -214,9 +214,15 @@ public class ReplayScene extends Scene {
             float w2 = (ei.w > 0 ? ei.w : 20);
             float h2 = (ei.h > 0 ? ei.h : 20);
             obj = com.gameengine.example.EntityFactory.createAIVisual(renderer, w2, h2, ei.r, ei.g, ei.b, ei.a);
+        } else if ("Enemy".equalsIgnoreCase(ei.id)) {
+            obj = com.gameengine.example.EntityFactory.createEnemyVisual(renderer);
+        } else if ("Fireball".equalsIgnoreCase(ei.id)) {
+            obj = com.gameengine.example.EntityFactory.createFireballVisual(renderer);
+        } else if ("Decoration".equalsIgnoreCase(ei.id)) {
+            obj = com.gameengine.example.EntityFactory.createDecorationVisual(renderer);
         } else {
             if ("CIRCLE".equals(ei.rt)) {
-                GameObject tmp = new GameObject(ei.id == null ? ("Obj#"+index) : ei.id);
+                GameObject tmp = new GameObject(ei.id == null ? ("Obj#"+uid) : ei.id);
                 tmp.addComponent(new TransformComponent(new Vector2(0,0)));
                 com.gameengine.components.RenderComponent rc = tmp.addComponent(
                     new com.gameengine.components.RenderComponent(
@@ -230,7 +236,7 @@ public class ReplayScene extends Scene {
             } else {
                 obj = com.gameengine.example.EntityFactory.createAIVisual(renderer, Math.max(1, ei.w>0?ei.w:10), Math.max(1, ei.h>0?ei.h:10), ei.r, ei.g, ei.b, ei.a);
             }
-            obj.setName(ei.id == null ? ("Obj#"+index) : ei.id);
+            obj.setName(ei.id == null ? ("Obj#"+uid) : ei.id);
         }
         TransformComponent tc = obj.getComponent(TransformComponent.class);
         if (tc == null) obj.addComponent(new TransformComponent(new Vector2(ei.pos)));

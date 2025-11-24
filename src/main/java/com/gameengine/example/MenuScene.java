@@ -34,7 +34,6 @@ public class MenuScene extends Scene {
     public MenuScene(GameEngine engine, String name) {
         super(name);
         this.engine = engine;
-        this.renderer = engine.getRenderer();
         this.inputManager = InputManager.getInstance();
         this.selectedIndex = 0;
         this.options = new MenuOption[]{MenuOption.START_GAME, MenuOption.REPLAY, MenuOption.EXIT};
@@ -49,7 +48,7 @@ public class MenuScene extends Scene {
     @Override
     public void initialize() {
         super.initialize();
-        loadReplayFiles();
+        this.renderer = engine.getRenderer();
         selectedIndex = 0;
         selectionMade = false;
         debugFrames = 0;
@@ -68,11 +67,11 @@ public class MenuScene extends Scene {
     }
     
     private void handleMenuSelection() {
-        if (inputManager.isKeyJustPressed(38)) {
+        if (inputManager.isKeyJustPressed(38) || inputManager.isKeyJustPressed(265)) {
             selectedIndex = (selectedIndex - 1 + options.length) % options.length;
-        } else if (inputManager.isKeyJustPressed(40)) {
+        } else if (inputManager.isKeyJustPressed(40) || inputManager.isKeyJustPressed(264)) {
             selectedIndex = (selectedIndex + 1) % options.length;
-        } else if (inputManager.isKeyJustPressed(10) || inputManager.isKeyJustPressed(32)) {
+        } else if (inputManager.isKeyJustPressed(10) || inputManager.isKeyJustPressed(32) || inputManager.isKeyJustPressed(257)) {
             selectionMade = true;
             selectedOption = options[selectedIndex];
             

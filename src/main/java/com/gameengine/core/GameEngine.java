@@ -18,6 +18,9 @@ public class GameEngine {
     private long lastTime;
     @SuppressWarnings("unused")
     private String title;
+    private RenderBackend renderBackend;
+    private int width;
+    private int height;
     // 新录制服务（可选）
     private com.gameengine.recording.RecordingService recordingService;
     
@@ -27,7 +30,9 @@ public class GameEngine {
     
     public GameEngine(int width, int height, String title, RenderBackend backend) {
         this.title = title;
-        this.renderer = RendererFactory.createRenderer(backend, width, height, title);
+        this.renderBackend = backend;
+        this.width = width;
+        this.height = height;
         this.inputManager = InputManager.getInstance();
         this.running = false;
         this.targetFPS = 60.0f;
@@ -37,6 +42,11 @@ public class GameEngine {
     }
     
     public boolean initialize() {
+        this.renderer = RendererFactory.createRenderer(this.renderBackend, this.width, this.height, this.title);
+        if (this.renderer == null) {
+            System.err.println("渲染器初始化失败.");
+            return false;
+        }
         return true;
     }
     
@@ -112,11 +122,13 @@ public class GameEngine {
         if (inputManager.isKeyPressed(27)) {
             running = false;
             cleanup();
+            return;
         }
         
         if (renderer.shouldClose() && running) {
             running = false;
             cleanup();
+            return;
         }
     }
     
