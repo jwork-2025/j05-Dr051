@@ -356,7 +356,7 @@ public class GameScene extends Scene {
         
         // Create fresh game objects
         createPlayer();
-        createEnemies(10);
+        createEnemies(20);
         createDecorations(5);
     }
     
