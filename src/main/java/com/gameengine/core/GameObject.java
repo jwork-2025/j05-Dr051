@@ -3,11 +3,14 @@ package com.gameengine.core;
 import java.util.*;
 
 public class GameObject {
+    private static long nextId = 0;
+    protected final long id;
     protected boolean active;
     protected String name;
     protected final List<Component<?>> components;
     
     public GameObject() {
+        this.id = nextId++;
         this.active = true;
         this.name = "GameObject";
         this.components = new ArrayList<>();
@@ -16,6 +19,10 @@ public class GameObject {
     public GameObject(String name) {
         this();
         this.name = name;
+    }
+    
+    public long getId() {
+        return id;
     }
     
     public void update(float deltaTime) {

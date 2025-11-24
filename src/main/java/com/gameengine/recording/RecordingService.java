@@ -125,6 +125,7 @@ public class RecordingService {
             if (!first) sb.append(',');
             sb.append('{')
               .append("\"id\":\"").append(obj.getName()).append("\",")
+              .append("\"uid\":").append(obj.getId()).append(',')
               .append("\"x\":").append(qfmt.format(x)).append(',')
               .append("\"y\":").append(qfmt.format(y));
 

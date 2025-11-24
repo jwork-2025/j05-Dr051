@@ -7,84 +7,200 @@ import com.gameengine.graphics.IRenderer;
 import com.gameengine.input.InputManager;
 import com.gameengine.math.Vector2;
 import com.gameengine.scene.Scene;
-import com.gameengine.example.EntityFactory;
 
 import java.io.File;
 import java.util.*;
 
 public class ReplayScene extends Scene {
+    private enum State {
+        SUB_MENU,
+        FILE_SELECT,
+        PLAYING
+    }
+
     private final GameEngine engine;
     private String recordingPath;
     private IRenderer renderer;
     private InputManager input;
+    
+    private State currentState;
+    
+    // Sub-menu
+    private int menuIndex = 0;
+    
+    // File select
+    private List<File> recordingFiles;
+    private int fileIndex = 0;
+    
+    // Playing
     private float time;
-    private boolean DEBUG_REPLAY = false;
-    private float debugAccumulator = 0f;
+    private final List<Keyframe> keyframes = new ArrayList<>();
+    private final Map<Long, GameObject> activeObjects = new HashMap<>();
 
     private static class Keyframe {
         static class EntityInfo {
+            long uid;
             Vector2 pos;
-            String rt; // RECTANGLE/CIRCLE/LINE/CUSTOM/null
+            String rt;
             float w, h;
-            float r=0.9f,g=0.9f,b=0.2f,a=1.0f; // 默认颜色
+            float r=0.9f,g=0.9f,b=0.2f,a=1.0f;
             String id;
         }
         double t;
         java.util.List<EntityInfo> entities = new ArrayList<>();
     }
 
-    private final List<Keyframe> keyframes = new ArrayList<>();
-    private final java.util.List<GameObject> objectList = new ArrayList<>();
-
-    // 如果 path 为 null，则先展示 recordings 目录下的文件列表，供用户选择
     public ReplayScene(GameEngine engine, String path) {
         super("Replay");
         this.engine = engine;
         this.recordingPath = path;
+        // If path provided, play immediately; otherwise sub-menu
+        this.currentState = (path != null) ? State.PLAYING : State.SUB_MENU;
     }
 
     @Override
     public void initialize() {
         super.initialize();
+        System.out.println("ReplayScene initializing...");
         this.renderer = engine.getRenderer();
         this.input = engine.getInputManager();
-        // 重置状态，防止从列表进入后残留
+        
         this.time = 0f;
         this.keyframes.clear();
-        this.objectList.clear();
+        this.activeObjects.clear();
+        
         if (recordingPath != null) {
+            System.out.println("Loading recording: " + recordingPath);
             loadRecording(recordingPath);
-            buildObjectsFromFirstKeyframe();
-            
+            this.currentState = State.PLAYING;
         } else {
-            // 仅进入文件选择模式
-            this.recordingFiles = null;
-            this.selectedIndex = 0;
+            System.out.println("Entering SUB_MENU");
+            this.currentState = State.SUB_MENU;
+            this.menuIndex = 0;
         }
     }
 
     @Override
     public void update(float deltaTime) {
-        super.update(deltaTime);
-        if (input.isKeyJustPressed(27) || input.isKeyJustPressed(8)) { // ESC/BACK
+        if (input == null) return;
+
+        // Global ESC: Return to Main Menu
+        if (input.isKeyJustPressed(27) || input.isKeyJustPressed(256)) {
+            System.out.println("ESC pressed, returning to MainMenu");
             engine.setScene(new MenuScene(engine, "MainMenu"));
             return;
         }
-        // 文件选择模式
-        if (recordingPath == null) {
-            handleFileSelection();
-            return;
-        }
 
-        if (keyframes.size() < 1) return;
+        super.update(deltaTime);
+
+        try {
+            switch (currentState) {
+                case SUB_MENU:
+                    updateSubMenu();
+                    break;
+                case FILE_SELECT:
+                    updateFileSelect();
+                    break;
+                case PLAYING:
+                    updatePlaying(deltaTime);
+                    break;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void updateSubMenu() {
+        // UP
+        if (input.isKeyJustPressed(38) || input.isKeyJustPressed(265)) {
+            menuIndex = (menuIndex - 1 + 2) % 2;
+        }
+        // DOWN
+        if (input.isKeyJustPressed(40) || input.isKeyJustPressed(264)) {
+            menuIndex = (menuIndex + 1) % 2;
+        }
+        // ENTER/SPACE
+        if (input.isKeyJustPressed(10) || input.isKeyJustPressed(32) || input.isKeyJustPressed(257) || input.isKeyJustPressed(335)) {
+            executeSubMenuAction(menuIndex);
+        }
+        
+        // Mouse
+        if (input.isMouseButtonJustPressed(0)) {
+            Vector2 mouse = input.getMousePosition();
+            float cx = renderer.getWidth() / 2.0f;
+            float cy = renderer.getHeight() / 2.0f;
+            
+            // SAVE button (index 0): cy - 40
+            if (isMouseInButton(mouse, cx, cy - 40)) {
+                executeSubMenuAction(0);
+            }
+            // RETURN button (index 1): cy + 40
+            else if (isMouseInButton(mouse, cx, cy + 40)) {
+                executeSubMenuAction(1);
+            }
+        }
+    }
+    
+    private void executeSubMenuAction(int index) {
+        if (index == 0) { // SAVE
+            ensureFilesListed();
+            currentState = State.FILE_SELECT;
+            fileIndex = 0;
+        } else { // RETURN
+            engine.setScene(new MenuScene(engine, "MainMenu"));
+        }
+    }
+
+    private void updateFileSelect() {
+        ensureFilesListed();
+        if (recordingFiles.isEmpty()) return;
+
+        // UP
+        if (input.isKeyJustPressed(38) || input.isKeyJustPressed(265)) {
+            fileIndex = (fileIndex - 1 + recordingFiles.size()) % recordingFiles.size();
+        }
+        // DOWN
+        if (input.isKeyJustPressed(40) || input.isKeyJustPressed(264)) {
+            fileIndex = (fileIndex + 1) % recordingFiles.size();
+        }
+        // ENTER/SPACE
+        if (input.isKeyJustPressed(10) || input.isKeyJustPressed(32) || input.isKeyJustPressed(257) || input.isKeyJustPressed(335)) {
+            playFile(fileIndex);
+        }
+        
+        // Mouse
+        if (input.isMouseButtonJustPressed(0)) {
+            Vector2 mouse = input.getMousePosition();
+            float startY = 100f;
+            float itemH = 30f;
+            for (int i = 0; i < recordingFiles.size(); i++) {
+                float y = startY + i * itemH;
+                if (mouse.y >= y && mouse.y < y + itemH) {
+                    playFile(i);
+                    break;
+                }
+            }
+        }
+    }
+    
+    private void playFile(int index) {
+        if (index >= 0 && index < recordingFiles.size()) {
+            String path = recordingFiles.get(index).getAbsolutePath();
+            this.recordingPath = path;
+            this.currentState = State.PLAYING;
+            this.activeObjects.clear();
+            super.clear(); // Clear Scene objects
+            loadRecording(path);
+        }
+    }
+
+    private void updatePlaying(float deltaTime) {
+        if (keyframes.isEmpty()) return;
+        
         time += deltaTime;
-        // 限制在最后关键帧处停止（也可选择循环播放）
         double lastT = keyframes.get(keyframes.size() - 1).t;
-        if (time > lastT) {
-            time = (float)lastT;
-        }
+        if (time > lastT) time = (float)lastT;
 
-        // 查找区间
         Keyframe a = keyframes.get(0);
         Keyframe b = keyframes.get(keyframes.size() - 1);
         for (int i = 0; i < keyframes.size() - 1; i++) {
@@ -94,24 +210,116 @@ public class ReplayScene extends Scene {
         }
         double span = Math.max(1e-6, b.t - a.t);
         double u = Math.min(1.0, Math.max(0.0, (time - a.t) / span));
-        // 调试输出节流
-        
-
         updateInterpolatedPositions(a, b, (float)u);
     }
 
     @Override
     public void render() {
-        renderer.drawRect(0, 0, renderer.getWidth(), renderer.getHeight(), 0.06f, 0.06f, 0.08f, 1.0f);
-        if (recordingPath == null) {
-            renderFileList();
+        try {
+            // Background: Dark Blue/Green mix to be distinct
+            renderer.drawRect(0, 0, renderer.getWidth(), renderer.getHeight(), 0.05f, 0.2f, 0.3f, 1.0f);
+
+            switch (currentState) {
+                case SUB_MENU:
+                    renderSubMenu();
+                    break;
+                case FILE_SELECT:
+                    renderFileSelect();
+                    break;
+                case PLAYING:
+                    super.render(); // Draw interpolated objects
+                    renderer.drawText(10, 10, "PLAYING (ESC to Exit)", 1f, 1f, 0f, 1f);
+                    break;
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            renderer.drawText(10, 50, "RENDER ERROR", 1f, 0f, 0f, 1f);
+        }
+    }
+
+    private void renderSubMenu() {
+        float w = renderer.getWidth();
+        float h = renderer.getHeight();
+        float cx = w / 2.0f;
+        float cy = h / 2.0f;
+
+        String title = "REPLAY OPTIONS";
+        renderer.drawText(cx - (title.length()*16f)/2f, cy - 120, title, 1f, 1f, 1f, 1f);
+
+        // Button 0: SAVE
+        drawCenteredButton("SAVE", cx, cy - 40, menuIndex == 0);
+        
+        // Button 1: RETURN
+        drawCenteredButton("RETURN", cx, cy + 40, menuIndex == 1);
+        
+        String hint = "UP/DOWN Select, ENTER Confirm";
+        renderer.drawText(cx - (hint.length()*12f)/2f, h - 50, hint, 0.6f, 0.6f, 0.6f, 1f);
+    }
+    
+    private void drawCenteredButton(String text, float cx, float cy, boolean selected) {
+        float w = 300f;
+        float h = 50f;
+        float x = cx - w/2;
+        float y = cy - h/2;
+        
+        if (selected) {
+            renderer.drawRect(x, y, w, h, 0.4f, 0.6f, 0.8f, 0.9f);
+            renderer.drawText(x + w/2 - (text.length()*16f)/2 + 30, y + 15, text, 1f, 1f, 0f, 1f); // Yellow text
+        } else {
+            renderer.drawRect(x, y, w, h, 0.2f, 0.2f, 0.3f, 0.5f);
+            renderer.drawText(x + w/2 - (text.length()*16f)/2 + 30, y + 15, text, 0.8f, 0.8f, 0.8f, 1f); // Grey text
+        }
+    }
+    
+    private boolean isMouseInButton(Vector2 mouse, float cx, float cy) {
+        return mouse.x >= cx - 150 && mouse.x <= cx + 150 &&
+               mouse.y >= cy - 25 && mouse.y <= cy + 25;
+    }
+
+    private void renderFileSelect() {
+        int w = renderer.getWidth();
+        int h = renderer.getHeight();
+        
+        String title = "SELECT RECORDING (ESC Back)";
+        renderer.drawText(20, 20, title, 1f, 1f, 1f, 1f);
+
+        if (recordingFiles == null || recordingFiles.isEmpty()) {
+            renderer.drawText(w/2f - 100, h/2f, "NO FILES FOUND", 1f, 0.5f, 0.5f, 1f);
             return;
         }
-        // 基于 Transform 手动绘制（回放对象没有附带 RenderComponent）
-        super.render();
-        String hint = "REPLAY: ESC to return";
-        float w = hint.length() * 12.0f;
-        renderer.drawText(renderer.getWidth()/2.0f - w/2.0f, 30, hint, 0.8f, 0.8f, 0.8f, 1.0f);
+
+        float startY = 100f;
+        float itemH = 30f;
+        
+        for (int i = 0; i < recordingFiles.size(); i++) {
+            float y = startY + i * itemH;
+            if (y > h - 30) break;
+            
+            String name = recordingFiles.get(i).getName();
+            if (i == fileIndex) {
+                renderer.drawRect(40, y, w - 80, itemH, 0.3f, 0.5f, 0.7f, 0.8f);
+                renderer.drawText(50, y + 5, "> " + name, 1f, 1f, 0f, 1f);
+            } else {
+                renderer.drawText(50, y + 5, "  " + name, 0.8f, 0.8f, 0.8f, 1f);
+            }
+        }
+    }
+
+    private void ensureFilesListed() {
+        if (recordingFiles != null) return;
+        try {
+            File dir = new File("recordings");
+            if (dir.exists()) {
+                File[] files = dir.listFiles((d, n) -> n.endsWith(".jsonl") || n.endsWith(".json"));
+                if (files != null) {
+                    Arrays.sort(files, (a,b) -> Long.compare(b.lastModified(), a.lastModified()));
+                    recordingFiles = new ArrayList<>(Arrays.asList(files));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        if (recordingFiles == null) recordingFiles = new ArrayList<>();
     }
 
     private void loadRecording(String path) {
@@ -119,189 +327,126 @@ public class ReplayScene extends Scene {
         com.gameengine.recording.RecordingStorage storage = new com.gameengine.recording.FileRecordingStorage();
         try {
             for (String line : storage.readLines(path)) {
-                if (line.contains("\"type\":\"keyframe\"")) {
-                    Keyframe kf = new Keyframe();
-                    kf.t = com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(line, "t"));
-                    // 解析 entities 列表中的若干 {"id":"name","x":num,"y":num}
-                    int idx = line.indexOf("\"entities\":[");
-                    if (idx >= 0) {
-                        int bracket = line.indexOf('[', idx);
-                        String arr = bracket >= 0 ? com.gameengine.recording.RecordingJson.extractArray(line, bracket) : "";
-                        String[] parts = com.gameengine.recording.RecordingJson.splitTopLevel(arr);
-                        for (String p : parts) {
-                            Keyframe.EntityInfo ei = new Keyframe.EntityInfo();
-                            ei.id = com.gameengine.recording.RecordingJson.stripQuotes(com.gameengine.recording.RecordingJson.field(p, "id"));
-                            double x = com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "x"));
-                            double y = com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "y"));
-                            ei.pos = new Vector2((float)x, (float)y);
-                            String rt = com.gameengine.recording.RecordingJson.stripQuotes(com.gameengine.recording.RecordingJson.field(p, "rt"));
-                            ei.rt = rt;
-                            ei.w = (float)com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "w"));
-                            ei.h = (float)com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "h"));
-                            String colorArr = com.gameengine.recording.RecordingJson.field(p, "color");
-                            if (colorArr != null && colorArr.startsWith("[")) {
-                                String c = colorArr.substring(1, Math.max(1, colorArr.indexOf(']', 1)));
-                                String[] cs = c.split(",");
-                                if (cs.length >= 3) {
-                                    try {
-                                        ei.r = Float.parseFloat(cs[0].trim());
-                                        ei.g = Float.parseFloat(cs[1].trim());
-                                        ei.b = Float.parseFloat(cs[2].trim());
-                                        if (cs.length >= 4) ei.a = Float.parseFloat(cs[3].trim());
-                                    } catch (Exception ignored) {}
-                                }
+                if (!line.contains("\"type\":\"keyframe\"")) continue;
+                Keyframe kf = new Keyframe();
+                // Simplified JSON parsing for robustness
+                kf.t = com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(line, "t"));
+                
+                int idx = line.indexOf("\"entities\":[");
+                if (idx >= 0) {
+                    int bracket = line.indexOf('[', idx);
+                    String arr = bracket >= 0 ? com.gameengine.recording.RecordingJson.extractArray(line, bracket) : "";
+                    String[] parts = com.gameengine.recording.RecordingJson.splitTopLevel(arr);
+                    for (String p : parts) {
+                        Keyframe.EntityInfo ei = new Keyframe.EntityInfo();
+                        ei.id = com.gameengine.recording.RecordingJson.stripQuotes(com.gameengine.recording.RecordingJson.field(p, "id"));
+                        String uid = com.gameengine.recording.RecordingJson.field(p, "uid");
+                        ei.uid = (uid != null) ? Long.parseLong(uid) : -1L;
+                        
+                        ei.pos = new Vector2(
+                            (float)com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "x")),
+                            (float)com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "y"))
+                        );
+                        
+                        ei.rt = com.gameengine.recording.RecordingJson.stripQuotes(com.gameengine.recording.RecordingJson.field(p, "rt"));
+                        ei.w = (float)com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "w"));
+                        ei.h = (float)com.gameengine.recording.RecordingJson.parseDouble(com.gameengine.recording.RecordingJson.field(p, "h"));
+                        
+                        // Color parsing
+                        String c = com.gameengine.recording.RecordingJson.field(p, "color");
+                        if (c != null && c.startsWith("[")) {
+                            String inner = c.substring(1, c.indexOf(']'));
+                            String[] rgba = inner.split(",");
+                            if (rgba.length >= 3) {
+                                try {
+                                    ei.r = Float.parseFloat(rgba[0]);
+                                    ei.g = Float.parseFloat(rgba[1]);
+                                    ei.b = Float.parseFloat(rgba[2]);
+                                    if (rgba.length > 3) ei.a = Float.parseFloat(rgba[3]);
+                                } catch (Exception ignored) {}
                             }
-                            kf.entities.add(ei);
                         }
+                        kf.entities.add(ei);
                     }
-                    keyframes.add(kf);
                 }
+                keyframes.add(kf);
             }
         } catch (Exception e) {
-            
+            e.printStackTrace();
         }
         keyframes.sort(Comparator.comparingDouble(k -> k.t));
     }
 
-    private void buildObjectsFromFirstKeyframe() {
-        if (keyframes.isEmpty()) return;
-        Keyframe kf0 = keyframes.get(0);
-        // 按实体构建对象（使用预制），实现与游戏内一致外观
-        objectList.clear();
-        clear();
-        for (int i = 0; i < kf0.entities.size(); i++) {
-            GameObject obj = buildObjectFromEntity(kf0.entities.get(i), i);
-            addGameObject(obj);
-            objectList.add(obj);
-        }
-        time = 0f;
-    }
-
-    private void ensureObjectCount(int n) {
-        while (objectList.size() < n) {
-            GameObject obj = new GameObject("RObj#" + objectList.size());
-            obj.addComponent(new TransformComponent(new Vector2(0, 0)));
-            // 为回放对象添加可渲染组件（默认外观，稍后在 refreshRenderFromKeyframe 应用真实外观）
-            addGameObject(obj);
-            objectList.add(obj);
-        }
-        while (objectList.size() > n) {
-            GameObject obj = objectList.remove(objectList.size() - 1);
-            obj.setActive(false);
-        }
-    }
-
-    
     private void updateInterpolatedPositions(Keyframe a, Keyframe b, float u) {
-        int n = Math.min(a.entities.size(), b.entities.size());
-        ensureObjectCount(n);
-        for (int i = 0; i < n; i++) {
-            Vector2 pa = a.entities.get(i).pos;
-            Vector2 pb = b.entities.get(i).pos;
-            float x = (float)((1.0 - u) * pa.x + u * pb.x);
-            float y = (float)((1.0 - u) * pa.y + u * pb.y);
-            GameObject obj = objectList.get(i);
-            TransformComponent tc = obj.getComponent(TransformComponent.class);
-            if (tc != null) tc.setPosition(new Vector2(x, y));
-        }
-    }
+        Set<Long> currentUIDs = new HashSet<>();
+        Map<Long, Keyframe.EntityInfo> bMap = new HashMap<>();
+        for (Keyframe.EntityInfo ei : b.entities) bMap.put(ei.uid, ei);
 
-    private GameObject buildObjectFromEntity(Keyframe.EntityInfo ei, int index) {
-        GameObject obj;
-        if ("Player".equalsIgnoreCase(ei.id)) {
-            obj = com.gameengine.example.EntityFactory.createPlayerVisual(renderer);
-        } else if ("AIPlayer".equalsIgnoreCase(ei.id)) {
-            float w2 = (ei.w > 0 ? ei.w : 20);
-            float h2 = (ei.h > 0 ? ei.h : 20);
-            obj = com.gameengine.example.EntityFactory.createAIVisual(renderer, w2, h2, ei.r, ei.g, ei.b, ei.a);
-        } else {
-            if ("CIRCLE".equals(ei.rt)) {
-                GameObject tmp = new GameObject(ei.id == null ? ("Obj#"+index) : ei.id);
-                tmp.addComponent(new TransformComponent(new Vector2(0,0)));
-                com.gameengine.components.RenderComponent rc = tmp.addComponent(
-                    new com.gameengine.components.RenderComponent(
-                        com.gameengine.components.RenderComponent.RenderType.CIRCLE,
-                        new Vector2(Math.max(1, ei.w), Math.max(1, ei.h)),
-                        new com.gameengine.components.RenderComponent.Color(ei.r, ei.g, ei.b, ei.a)
-                    )
+        for (Keyframe.EntityInfo eiA : a.entities) {
+            currentUIDs.add(eiA.uid);
+            GameObject obj = activeObjects.computeIfAbsent(eiA.uid, k -> {
+                GameObject newObj = buildObjectFromEntity(eiA);
+                addGameObject(newObj);
+                return newObj;
+            });
+            
+            Vector2 target = eiA.pos;
+            if (bMap.containsKey(eiA.uid)) {
+                Keyframe.EntityInfo eiB = bMap.get(eiA.uid);
+                target = new Vector2(
+                    (float)((1-u)*eiA.pos.x + u*eiB.pos.x),
+                    (float)((1-u)*eiA.pos.y + u*eiB.pos.y)
                 );
-                rc.setRenderer(renderer);
-                obj = tmp;
+            }
+            
+            TransformComponent tc = obj.getComponent(TransformComponent.class);
+            if (tc != null) tc.setPosition(target);
+            obj.setActive(true);
+        }
+        
+        activeObjects.entrySet().removeIf(e -> {
+            if (!currentUIDs.contains(e.getKey())) {
+                e.getValue().setActive(false);
+                return true;
+            }
+            return false;
+        });
+    }
+
+        private GameObject buildObjectFromEntity(Keyframe.EntityInfo ei) {
+            GameObject obj;
+            if ("Player".equalsIgnoreCase(ei.id)) {
+                obj = com.gameengine.example.EntityFactory.createPlayerVisual(renderer);
+            } else if ("AIPlayer".equalsIgnoreCase(ei.id)) {
+                float w2 = (ei.w > 0 ? ei.w : 20);
+                float h2 = (ei.h > 0 ? ei.h : 20);
+                obj = com.gameengine.example.EntityFactory.createAIVisual(renderer, w2, h2, ei.r, ei.g, ei.b, ei.a);
+            } else if ("Enemy".equalsIgnoreCase(ei.id)) {
+                obj = com.gameengine.example.EntityFactory.createEnemyVisual(renderer);
+            } else if ("Fireball".equalsIgnoreCase(ei.id)) {
+                obj = com.gameengine.example.EntityFactory.createFireballVisual(renderer);
+            } else if ("Decoration".equalsIgnoreCase(ei.id)) {
+                obj = com.gameengine.example.EntityFactory.createDecorationVisual(renderer);
             } else {
-                obj = com.gameengine.example.EntityFactory.createAIVisual(renderer, Math.max(1, ei.w>0?ei.w:10), Math.max(1, ei.h>0?ei.h:10), ei.r, ei.g, ei.b, ei.a);
+                if ("CIRCLE".equals(ei.rt)) {
+                    GameObject tmp = new GameObject(ei.id == null ? ("Obj#"+ei.uid) : ei.id);
+                    tmp.addComponent(new TransformComponent(new Vector2(0,0)));
+                    com.gameengine.components.RenderComponent rc = tmp.addComponent(
+                        new com.gameengine.components.RenderComponent(
+                            com.gameengine.components.RenderComponent.RenderType.CIRCLE,
+                            new Vector2(Math.max(1, ei.w), Math.max(1, ei.h)),
+                            new com.gameengine.components.RenderComponent.Color(ei.r, ei.g, ei.b, ei.a)
+                        )
+                    );
+                    rc.setRenderer(renderer);
+                    obj = tmp;
+                } else {
+                    obj = com.gameengine.example.EntityFactory.createAIVisual(renderer, Math.max(1, ei.w>0?ei.w:10), Math.max(1, ei.h>0?ei.h:10), ei.r, ei.g, ei.b, ei.a);
+                }
+                obj.setName(ei.id == null ? ("Obj#"+ei.uid) : ei.id);
             }
-            obj.setName(ei.id == null ? ("Obj#"+index) : ei.id);
-        }
-        TransformComponent tc = obj.getComponent(TransformComponent.class);
-        if (tc == null) obj.addComponent(new TransformComponent(new Vector2(ei.pos)));
-        else tc.setPosition(new Vector2(ei.pos));
-        return obj;
-    }
-
-    // ========== 文件列表模式 ==========
-    private List<File> recordingFiles;
-    private int selectedIndex = 0;
-
-    private void ensureFilesListed() {
-        if (recordingFiles != null) return;
-        com.gameengine.recording.RecordingStorage storage = new com.gameengine.recording.FileRecordingStorage();
-        recordingFiles = storage.listRecordings();
-    }
-
-    private void handleFileSelection() {
-        ensureFilesListed();
-        if (input.isKeyJustPressed(38) || input.isKeyJustPressed(265)) { // up (AWT 38 / GLFW 265)
-            selectedIndex = (selectedIndex - 1 + Math.max(1, recordingFiles.size())) % Math.max(1, recordingFiles.size());
-        } else if (input.isKeyJustPressed(40) || input.isKeyJustPressed(264)) { // down (AWT 40 / GLFW 264)
-            selectedIndex = (selectedIndex + 1) % Math.max(1, recordingFiles.size());
-        } else if (input.isKeyJustPressed(10) || input.isKeyJustPressed(32) || input.isKeyJustPressed(257) || input.isKeyJustPressed(335)) { // enter/space (AWT 10/32, GLFW 257/335)
-            if (recordingFiles.size() > 0) {
-                String path = recordingFiles.get(selectedIndex).getAbsolutePath();
-                this.recordingPath = path;
-                clear();
-                initialize();
-            }
-        } else if (input.isKeyJustPressed(27)) { // esc
-            engine.setScene(new MenuScene(engine, "MainMenu"));
-        }
-    }
-
-    private void renderFileList() {
-        ensureFilesListed();
-        int w = renderer.getWidth();
-        int h = renderer.getHeight();
-        String title = "SELECT RECORDING";
-        float tw = title.length() * 16f;
-        renderer.drawText(w/2f - tw/2f, 80, title, 1f,1f,1f,1f);
-
-        if (recordingFiles.isEmpty()) {
-            String none = "NO RECORDINGS FOUND";
-            float nw = none.length() * 14f;
-            renderer.drawText(w/2f - nw/2f, h/2f, none, 0.9f,0.8f,0.2f,1f);
-            String back = "ESC TO RETURN";
-            float bw = back.length() * 12f;
-            renderer.drawText(w/2f - bw/2f, h - 60, back, 0.7f,0.7f,0.7f,1f);
-            return;
-        }
-
-        float startY = 140f;
-        float itemH = 28f;
-        for (int i = 0; i < recordingFiles.size(); i++) {
-            String name = recordingFiles.get(i).getName();
-            float x = 100f;
-            float y = startY + i * itemH;
-            if (i == selectedIndex) {
-                renderer.drawRect(x - 10, y - 6, 600, 24, 0.3f,0.3f,0.4f,0.8f);
-            }
-            renderer.drawText(x, y, name, 0.9f,0.9f,0.9f,1f);
-        }
-
-        String hint = "UP/DOWN SELECT, ENTER PLAY, ESC RETURN";
-        float hw = hint.length() * 12f;
-        renderer.drawText(w/2f - hw/2f, h - 60, hint, 0.7f,0.7f,0.7f,1f);
-    }
-
-    // 解析相关逻辑已移至 RecordingJson
-}
-
-
+            TransformComponent tc = obj.getComponent(TransformComponent.class);
+            if (tc == null) obj.addComponent(new TransformComponent(new Vector2(ei.pos)));
+            else tc.setPosition(new Vector2(ei.pos));
+            return obj;
+        }}

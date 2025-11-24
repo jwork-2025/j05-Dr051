@@ -49,11 +49,13 @@ public class MenuScene extends Scene {
     @Override
     public void initialize() {
         super.initialize();
+        if (engine != null) {
+            engine.disableRecording();
+        }
         loadReplayFiles();
         selectedIndex = 0;
         selectionMade = false;
         debugFrames = 0;
-        
     }
     
     @Override
@@ -62,56 +64,72 @@ public class MenuScene extends Scene {
         
         handleMenuSelection();
         
-        if (selectionMade) {
-            processSelection();
-        }
+        // selectionMade handled immediately in confirmSelection
     }
     
     private void handleMenuSelection() {
-        if (inputManager.isKeyJustPressed(38)) {
+        // Keyboard Navigation
+        if (inputManager.isKeyJustPressed(38) || inputManager.isKeyJustPressed(265)) { // UP
             selectedIndex = (selectedIndex - 1 + options.length) % options.length;
-        } else if (inputManager.isKeyJustPressed(40)) {
+        } else if (inputManager.isKeyJustPressed(40) || inputManager.isKeyJustPressed(264)) { // DOWN
             selectedIndex = (selectedIndex + 1) % options.length;
-        } else if (inputManager.isKeyJustPressed(10) || inputManager.isKeyJustPressed(32)) {
-            selectionMade = true;
-            selectedOption = options[selectedIndex];
-            
-            if (selectedOption == MenuOption.REPLAY) {
-                engine.disableRecording();
-                Scene replay = new ReplayScene(engine, null);
-                engine.setScene(replay);
-            } else if (selectedOption == MenuOption.EXIT) {
-                engine.stop();
-                engine.cleanup();
-                System.exit(0);
-            }
+        } else if (inputManager.isKeyJustPressed(10) || inputManager.isKeyJustPressed(32) || inputManager.isKeyJustPressed(257) || inputManager.isKeyJustPressed(335)) { // Enter/Space
+            confirmSelection(options[selectedIndex]);
         }
         
-        Vector2 mousePos = inputManager.getMousePosition();
+        // Mouse Interaction
         if (inputManager.isMouseButtonJustPressed(0)) {
+            Vector2 mousePos = inputManager.getMousePosition();
             float centerY = renderer.getHeight() / 2.0f;
-            float buttonY1 = centerY - 80;
-            float buttonY2 = centerY + 0;
-            float buttonY3 = centerY + 80;
+            float centerX = renderer.getWidth() / 2.0f;
             
-            if (mousePos.y >= buttonY1 - 30 && mousePos.y <= buttonY1 + 30) {
+            // Define button areas (approximate based on rendering)
+            // START GAME: i=0, y=centerY-80
+            // REPLAY:     i=1, y=centerY
+            // EXIT:       i=2, y=centerY+80
+            // Text/Box width is dynamic, but let's assume a safe clickable width of ~300px centered
+            
+            float clickWidth = 300f;
+            float clickHeight = 50f;
+            
+            // Check START GAME
+            if (isMouseInRect(mousePos, centerX, centerY - 80, clickWidth, clickHeight)) {
                 selectedIndex = 0;
-                selectionMade = true;
-                selectedOption = MenuOption.START_GAME;
-            } else if (mousePos.y >= buttonY2 - 30 && mousePos.y <= buttonY2 + 30) {
-                selectedIndex = 1;
-                selectedOption = MenuOption.REPLAY;
-                engine.disableRecording();
-                Scene replay = new ReplayScene(engine, null);
-                engine.setScene(replay);
-            } else if (mousePos.y >= buttonY3 - 30 && mousePos.y <= buttonY3 + 30) {
-                selectedIndex = 2;
-                selectionMade = true;
-                selectedOption = MenuOption.EXIT;
-                engine.stop();
-                engine.cleanup();
-                System.exit(0);
+                confirmSelection(MenuOption.START_GAME);
             }
+            // Check REPLAY
+            else if (isMouseInRect(mousePos, centerX, centerY, clickWidth, clickHeight)) {
+                selectedIndex = 1;
+                confirmSelection(MenuOption.REPLAY);
+            }
+            // Check EXIT
+            else if (isMouseInRect(mousePos, centerX, centerY + 80, clickWidth, clickHeight)) {
+                selectedIndex = 2;
+                confirmSelection(MenuOption.EXIT);
+            }
+            // Click outside: Do nothing (ignore)
+        }
+    }
+    
+    private boolean isMouseInRect(Vector2 mouse, float cx, float cy, float w, float h) {
+        return mouse.x >= cx - w/2 && mouse.x <= cx + w/2 &&
+               mouse.y >= cy - h/2 && mouse.y <= cy + h/2;
+    }
+    
+    private void confirmSelection(MenuOption option) {
+        selectionMade = true;
+        selectedOption = option;
+        
+        if (selectedOption == MenuOption.START_GAME) {
+            switchToGameScene();
+        } else if (selectedOption == MenuOption.REPLAY) {
+            engine.disableRecording();
+            Scene replay = new ReplayScene(engine, null);
+            engine.setScene(replay);
+        } else if (selectedOption == MenuOption.EXIT) {
+            engine.stop();
+            engine.cleanup();
+            System.exit(0);
         }
     }
 
@@ -138,9 +156,10 @@ public class MenuScene extends Scene {
             String path = "recordings/session_" + System.currentTimeMillis() + ".jsonl";
             RecordingConfig cfg = new RecordingConfig(path);
             RecordingService svc = new RecordingService(cfg);
+            engine.setRecordingPath(path); // Store path for potential discard
             engine.enableRecording(svc);
         } catch (Exception e) {
-            
+            e.printStackTrace();
         }
     }
     

@@ -72,9 +72,13 @@ public class GameEngine {
                 lastFrameTime = currentTime;
             }
             
-            renderer.pollEvents();
+            // Only poll events if still running, to avoid polling a closing window if update() set running=false
+            if (running) {
+                renderer.pollEvents();
+            }
             
-            if (renderer.shouldClose()) {
+            // Check window close request
+            if (running && renderer.shouldClose()) {
                 running = false;
             }
             
@@ -84,6 +88,9 @@ public class GameEngine {
                 break;
             }
         }
+        
+        // Cleanup only after the loop finishes
+        cleanup();
     }
     
     private void update() {
@@ -91,9 +98,7 @@ public class GameEngine {
         deltaTime = (currentTime - lastTime) / 1_000_000_000.0f;
         lastTime = currentTime;
         
-        renderer.pollEvents();
-        
-        
+        // renderer.pollEvents() moved to main loop
         
         if (currentScene != null) {
             currentScene.update(deltaTime);
@@ -110,14 +115,16 @@ public class GameEngine {
         inputManager.update();
         
         if (inputManager.isKeyPressed(27)) {
-            running = false;
-            cleanup();
+            // If we are in MainMenu, ESC exits the application.
+            // If we are in GameScene or ReplayScene, the scene itself should handle ESC (e.g., return to menu).
+            if (currentScene != null && "MainMenu".equals(currentScene.getName())) {
+                running = false;
+                // Cleanup will happen after loop
+            }
+            // Otherwise, let the scene handle it in its update() method.
         }
         
-        if (renderer.shouldClose() && running) {
-            running = false;
-            cleanup();
-        }
+        // renderer.shouldClose() check moved to main loop
     }
     
     private void render() {
@@ -172,15 +179,46 @@ public class GameEngine {
         renderer.cleanup();
     }
 
+    private String currentRecordingPath;
+
     // 可选：外部启用录制（按需调用）
     public void enableRecording(com.gameengine.recording.RecordingService service) {
         this.recordingService = service;
         try {
             if (service != null && currentScene != null) {
+                // Assuming service has a way to get path or we rely on caller passing it?
+                // Service.start() was called by caller? No, enableRecording calls start.
+                // But start() signature is start(Scene, w, h).
+                // Service already has config with path.
+                // I can't get path from service easily.
+                // Let's assume enableRecording is passed the path too?
+                // Existing calls: engine.enableRecording(svc).
+                // I will overload or change logic.
+                
                 service.start(currentScene, renderer.getWidth(), renderer.getHeight());
             }
         } catch (Exception e) {
             System.err.println("录制启动失败: " + e.getMessage());
+        }
+    }
+    
+    public void setRecordingPath(String path) {
+        this.currentRecordingPath = path;
+    }
+
+    public void discardRecording() {
+        if (recordingService != null && recordingService.isRecording()) {
+            try { recordingService.stop(); } catch (Exception ignored) {}
+        }
+        recordingService = null;
+        if (currentRecordingPath != null) {
+            try {
+                java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(currentRecordingPath));
+                System.out.println("Recording discarded: " + currentRecordingPath);
+            } catch (Exception e) {
+                System.err.println("Failed to delete recording: " + e.getMessage());
+            }
+            currentRecordingPath = null;
         }
     }
 
@@ -189,6 +227,7 @@ public class GameEngine {
             try { recordingService.stop(); } catch (Exception ignored) {}
         }
         recordingService = null;
+        // Keep file
     }
     
     
